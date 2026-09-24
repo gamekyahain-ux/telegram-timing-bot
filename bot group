@@ -1,0 +1,122 @@
+import os
+import asyncio
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
+from telegram import Bot
+from telegram.error import TelegramError
+
+BOT_TOKEN = os.environ["BOT_TOKEN"]
+
+GROUP_1 = -1003983844612
+GROUP_2 = -1004327618398
+
+IST = ZoneInfo("Asia/Kolkata")
+
+# (open_time, close_time)
+SCHEDULE = [
+    ("13:00", "14:50"),
+    ("15:00", "16:30"),
+    ("17:00", "17:50"),
+    ("18:00", "21:50"),
+    ("22:00", "03:00"),
+]
+
+
+async def set_group_locked(bot, chat_id, locked):
+    permissions = {
+        "can_send_messages": not locked,
+        "can_send_audios": not locked,
+        "can_send_documents": not locked,
+        "can_send_photos": not locked,
+        "can_send_videos": not locked,
+        "can_send_video_notes": not locked,
+        "can_send_voice_notes": not locked,
+        "can_send_polls": not locked,
+        "can_send_other_messages": not locked,
+        "can_add_web_page_previews": not locked,
+    }
+
+    await bot.set_chat_permissions(
+        chat_id=chat_id,
+        permissions=permissions
+    )
+
+
+def current_slot():
+    now = datetime.now(IST)
+    current = now.hour * 60 + now.minute
+
+    for start, end in SCHEDULE:
+        sh, sm = map(int, start.split(":"))
+        eh, em = map(int, end.split(":"))
+
+        start_min = sh * 60 + sm
+        end_min = eh * 60 + em
+
+        # 22:00 → 03:00 (crosses midnight)
+        if end_min < start_min:
+            if current >= start_min or current < end_min:
+                return True
+
+        elif start_min <= current < end_min:
+            return True
+
+    return False
+
+
+async def main():
+    bot = Bot(BOT_TOKEN)
+
+    last_state = None
+
+    while True:
+        try:
+            active = current_slot()
+
+            # Alternate groups according to the 5 time slots
+            now = datetime.now(IST)
+            current = now.hour * 60 + now.minute
+
+            if 13 * 60 <= current < 14 * 60 + 50:
+                open_group = GROUP_1
+            elif 15 * 60 <= current < 16 * 60 + 30:
+                open_group = GROUP_2
+            elif 17 * 60 <= current < 17 * 60 + 50:
+                open_group = GROUP_1
+            elif 18 * 60 <= current < 21 * 60 + 50:
+                open_group = GROUP_2
+            elif current >= 22 * 60 or current < 3 * 60:
+                open_group = GROUP_1
+            else:
+                open_group = None
+
+            state = (active, open_group)
+
+            if state != last_state:
+                if open_group == GROUP_1:
+                    await set_group_locked(bot, GROUP_1, False)
+                    await set_group_locked(bot, GROUP_2, True)
+
+                elif open_group == GROUP_2:
+                    await set_group_locked(bot, GROUP_1, True)
+                    await set_group_locked(bot, GROUP_2, False)
+
+                else:
+                    await set_group_locked(bot, GROUP_1, True)
+                    await set_group_locked(bot, GROUP_2, True)
+
+                last_state = state
+                print("Updated:", state)
+
+        except TelegramError as e:
+            print("Telegram error:", e)
+
+        except Exception as e:
+            print("Error:", e)
+
+        await asyncio.sleep(30)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
