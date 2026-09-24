@@ -1,138 +1,86 @@
 import os
-import asyncio
-from aiohttp import web
-from telegram import Update, ChatPermissions
-from telegram.ext import (
-    Application,
-    CommandHandler,
-    ContextTypes,
-)
+from datetime import datetime
+from zoneinfo import ZoneInfo
 
-BOT_TOKEN = os.getenv("BOT_TOKEN")
+from telegram import Bot, ChatPermissions
 
+BOT_TOKEN = os.environ["BOT_TOKEN"]
 
-async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        "🤖 Bot चालू है!\n\n"
-        "/lock - Group lock\n"
-        "/unlock - Group unlock\n"
-        "/warn - Warning message\n"
-        "/id - Group ID"
-    )
+GROUP_1 = -1003983844612
+GROUP_2 = -1004327618398
+
+IST = ZoneInfo("Asia/Kolkata")
 
 
-async def is_admin(update: Update):
-    member = await update.effective_chat.get_member(
-        update.effective_user.id
-    )
-    return member.status in ("administrator", "creator")
+def get_open_group():
+    now = datetime.now(IST)
+    minutes = now.hour * 60 + now.minute
+
+    # 1:00 PM - 2:50 PM
+    if 13 * 60 <= minutes < 14 * 60 + 50:
+        return GROUP_1
+
+    # 3:00 PM - 4:30 PM
+    if 15 * 60 <= minutes < 16 * 60 + 30:
+        return GROUP_2
+
+    # 5:00 PM - 5:50 PM
+    if 17 * 60 <= minutes < 17 * 60 + 50:
+        return GROUP_1
+
+    # 6:00 PM - 9:50 PM
+    if 18 * 60 <= minutes < 21 * 60 + 50:
+        return GROUP_2
+
+    # 10:00 PM - 3:00 AM
+    if minutes >= 22 * 60 or minutes < 3 * 60:
+        return GROUP_1
+
+    # बाकी समय दोनों LOCK
+    return None
 
 
-async def lock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update):
-        return
-
+async def set_lock(bot, chat_id, locked):
     permissions = ChatPermissions(
-        can_send_messages=False
+        can_send_messages=not locked,
+        can_send_audios=not locked,
+        can_send_documents=not locked,
+        can_send_photos=not locked,
+        can_send_videos=not locked,
+        can_send_video_notes=not locked,
+        can_send_voice_notes=not locked,
+        can_send_polls=not locked,
+        can_send_other_messages=not locked,
+        can_add_web_page_previews=not locked,
     )
 
-    await update.effective_chat.set_permissions(
+    await bot.set_chat_permissions(
+        chat_id=chat_id,
         permissions=permissions
     )
-
-    await update.message.reply_text(
-        "🔒 GROUP LOCKED\n\n"
-        "⚠️ अभी केवल Admin message भेज सकते हैं।"
-    )
-
-
-async def unlock(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update):
-        return
-
-    permissions = ChatPermissions(
-        can_send_messages=True,
-        can_send_audios=True,
-        can_send_documents=True,
-        can_send_photos=True,
-        can_send_videos=True,
-        can_send_video_notes=True,
-        can_send_voice_notes=True,
-        can_send_polls=True,
-        can_send_other_messages=True,
-        can_add_web_page_previews=True
-    )
-
-    await update.effective_chat.set_permissions(
-        permissions=permissions
-    )
-
-    await update.message.reply_text(
-        "🔓 GROUP UNLOCKED\n\n"
-        "✅ अब members message भेज सकते हैं।"
-    )
-
-
-async def warn(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not await is_admin(update):
-        return
-
-    await update.message.reply_text(
-        "⚠️⚠️ आवश्यक सूचना ⚠️⚠️\n\n"
-        "🚨 सभी सदस्य ध्यान दें 🚨\n\n"
-        "❌ किसी भी व्यक्ति को अपना OTP न दें।\n"
-        "❌ किसी अनजान व्यक्ति को personal payment न करें।\n\n"
-        "🙏 सावधान रहें और सुरक्षित रहें।"
-    )
-
-
-async def group_id(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(
-        f"🆔 Group ID:\n`{update.effective_chat.id}`",
-        parse_mode="Markdown"
-    )
-
-
-async def health(request):
-    return web.Response(text="Bot is running ✅")
-
-
-async def start_web_server():
-    app = web.Application()
-    app.router.add_get("/", health)
-
-    runner = web.AppRunner(app)
-    await runner.setup()
-
-    port = int(os.environ.get("PORT", 10000))
-    site = web.TCPSite(runner, "0.0.0.0", port)
-
-    await site.start()
 
 
 async def main():
-    if not BOT_TOKEN:
-        raise RuntimeError("BOT_TOKEN environment variable missing")
+    bot = Bot(BOT_TOKEN)
 
-    application = Application.builder().token(BOT_TOKEN).build()
+    open_group = get_open_group()
 
-    application.add_handler(CommandHandler("start", start))
-    application.add_handler(CommandHandler("lock", lock))
-    application.add_handler(CommandHandler("unlock", unlock))
-    application.add_handler(CommandHandler("warn", warn))
-    application.add_handler(CommandHandler("id", group_id))
+    if open_group == GROUP_1:
+        await set_lock(bot, GROUP_1, False)
+        await set_lock(bot, GROUP_2, True)
+        print("GROUP 1 OPEN - GROUP 2 LOCK")
 
-    await start_web_server()
+    elif open_group == GROUP_2:
+        await set_lock(bot, GROUP_1, True)
+        await set_lock(bot, GROUP_2, False)
+        print("GROUP 1 LOCK - GROUP 2 OPEN")
 
-    await application.initialize()
-    await application.start()
-    await application.updater.start_polling()
-
-    print("Bot started successfully ✅")
-
-    while True:
-        await asyncio.sleep(3600)
+    else:
+        await set_lock(bot, GROUP_1, True)
+        await set_lock(bot, GROUP_2, True)
+        print("BOTH GROUPS LOCK")
 
 
 if __name__ == "__main__":
-    asyncio.run(main()) 
+    import asyncio
+    asyncio.run(main())
